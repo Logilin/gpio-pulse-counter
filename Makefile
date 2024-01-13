@@ -6,10 +6,6 @@ ifneq ($(KERNELRELEASE),)
 	obj-m  = gpio-pulse-counter.o
 
 else
-
-	export ARCH          := arm
-	export KERNEL_DIR    := ~/builds/build-azlac-vip-iii/tmp/work/azlac_vip_iii-poky-linux-gnueabi/linux-mainline/4.14.213-phy1-r0.0/build/
-
 	MODULE_DIR := $(shell pwd)
 
 .PHONY: all
@@ -17,7 +13,11 @@ all: modules
 
 .PHONY: modules
 modules:
-	$(MAKE) -C $(KERNEL_DIR) M=$(MODULE_DIR)  modules
+	$(MAKE) -C $(KERNEL_SRC) M=$(MODULE_DIR)  modules
+
+.PHONY: modules_install
+modules_install:
+	$(MAKE) -C $(KERNEL_SRC) M=$(MODULE_DIR)  modules_install
 
 .PHONY: clean
 clean:
