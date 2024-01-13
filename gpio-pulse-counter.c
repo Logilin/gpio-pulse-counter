@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 //
-// Savelec board pulse counter
+// GPIO pulse counter
 //
 // (c) 2024 Christophe Blaess
 //
@@ -21,12 +21,12 @@
 static unsigned long long Counter[NB];
 static spinlock_t Counter_spl[NB];
 
-int Savelec_pulse_in[NB] = { 31, 30, 122, 121, 124, 123};
+int Pulse_in[NB] = { 31, 30, 122, 121, 124, 123};
 
-static struct miscdevice savelec_pulse_counter_misc_driver [NB];
+static struct miscdevice Gpio_pulse_counter_misc_driver [NB];
 
 
-static ssize_t savelec_pulse_counter_read(struct file *filp, char *u_buffer, size_t length, loff_t *offset)
+static ssize_t gpio_pulse_counter_read(struct file *filp, char *u_buffer, size_t length, loff_t *offset)
 {
 	unsigned long irqs;
 	unsigned long long value;
@@ -57,11 +57,11 @@ static ssize_t savelec_pulse_counter_read(struct file *filp, char *u_buffer, siz
 }
 
 
-int savelec_pulse_counter_open(struct inode *ind, struct file *filp)
+int gpio_pulse_counter_open(struct inode *ind, struct file *filp)
 {
 	int i;
 	for (i = 0; i < NB; i ++) {
-		if (iminor(ind) == savelec_pulse_counter_misc_driver[i].minor) {
+		if (iminor(ind) == Gpio_pulse_counter_misc_driver[i].minor) {
 			filp->private_data = (void *) i;
 			break;
 		}
@@ -158,21 +158,21 @@ static int __init savelec_pulse_counter_init(void)
 }
 
 
-static void __exit savelec_pulse_counter_exit(void)
+static void __exit gpio_pulse_counter_exit(void)
 {
 	unsigned long num;
 
 	for (num = 0; num < NB; num++) {
-		misc_deregister(&savelec_pulse_counter_misc_driver[num]);
-		free_irq(gpio_to_irq(Savelec_pulse_in[num]), (void *) num);
-		gpio_free(Savelec_pulse_in[num]);
+		misc_deregister(&gpio_pulse_counter_misc_driver[num]);
+		free_irq(gpio_to_irq(Gpio_pulse_in[num]), (void *) num);
+		gpio_free(Gpio_pulse_in[num]);
 	}
 }
 
 
-module_init(savelec_pulse_counter_init);
-module_exit(savelec_pulse_counter_exit);
+module_init(gpio_pulse_counter_init);
+module_exit(gpio_pulse_counter_exit);
 
-MODULE_DESCRIPTION("Savelec Pulse Counter");
+MODULE_DESCRIPTION("GPIO Pulse Counter");
 MODULE_AUTHOR("Christophe Blaess <Christophe.Blaess@Logilin.fr>");
 MODULE_LICENSE("GPL v2");
