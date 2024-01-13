@@ -3,7 +3,7 @@
 
 ifneq ($(KERNELRELEASE),)
 
-	obj-m  = savelec-pulse-counter.o
+	obj-m  = gpio-pulse-counter.o
 
 else
 

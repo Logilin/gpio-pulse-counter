@@ -17,13 +17,20 @@
 #include <asm/uaccess.h>
 
 
-#define NB   6
-static unsigned long long Counter[NB];
-static spinlock_t Counter_spl[NB];
+#define NB_MAX  32
+int Gpio[NB_MAX];
+int Edge[NB_MAX];
 
-int Pulse_in[NB] = { 31, 30, 122, 121, 124, 123};
+int Gpio_count;
+int Edge_count;
 
-static struct miscdevice Gpio_pulse_counter_misc_driver [NB];
+module_param_array_named(gpio, Gpio, int, &Gpio_count, 0);
+module_param_array_named(edge, Edge, int, &Edge_count, 0);
+
+static unsigned long long Counter[NB_MAX];
+static spinlock_t Counter_spl[NB_MAX];
+
+static struct miscdevice Gpio_pulse_counter_misc_driver [NB_MAX];
 
 
 static ssize_t gpio_pulse_counter_read(struct file *filp, char *u_buffer, size_t length, loff_t *offset)
@@ -33,7 +40,7 @@ static ssize_t gpio_pulse_counter_read(struct file *filp, char *u_buffer, size_t
 	char k_buffer[80];
 	unsigned long num = (unsigned long) filp->private_data;
 
-	if ((num < 0) || (num >= NB)) {
+	if ((num < 0) || (num >= Gpio_count)) {
 		pr_err("%s: Invalid number: %lu\n", THIS_MODULE->name, num);
 		return -EINVAL;
 	}
@@ -60,7 +67,7 @@ static ssize_t gpio_pulse_counter_read(struct file *filp, char *u_buffer, size_t
 int gpio_pulse_counter_open(struct inode *ind, struct file *filp)
 {
 	int i;
-	for (i = 0; i < NB; i ++) {
+	for (i = 0; i < Gpio_count; i ++) {
 		if (iminor(ind) == Gpio_pulse_counter_misc_driver[i].minor) {
 			filp->private_data = (void *) i;
 			break;
@@ -70,85 +77,92 @@ int gpio_pulse_counter_open(struct inode *ind, struct file *filp)
 }
 
 
-static irqreturn_t savelec_pulse_counter_handler(int irq, void *id)
+static irqreturn_t gpio_pulse_counter_handler(int irq, void *id)
 {
 	unsigned long num = (unsigned long) id;
 
-	if ((num < 0) || (num >= NB)) {
+	if ((num < 0) || (num >= Gpio_count)) {
 		pr_err("%s: Invalid number: %lu\n", THIS_MODULE->name, num);
 		return IRQ_NONE;
 	}
 
 	spin_lock(&Counter_spl[num]);
-
 	Counter[num] ++;
-
 	spin_unlock(&Counter_spl[num]);
 
 	return IRQ_HANDLED;
 }
 
 
-static const struct file_operations savelec_pulse_counter_fops = {
+static const struct file_operations Gpio_pulse_counter_fops = {
 	.owner =  THIS_MODULE,
-	.read  =  savelec_pulse_counter_read,
-	.open  =  savelec_pulse_counter_open,
+	.read  =  gpio_pulse_counter_read,
+	.open  =  gpio_pulse_counter_open,
 };
 
 
-static int __init savelec_pulse_counter_init(void)
+static int __init gpio_pulse_counter_init(void)
 {
 	long num;
 	int err;
 	char name[32];
 
-	for (num = 0; num < NB; num++) {
-		err = gpio_request(Savelec_pulse_in[num], THIS_MODULE->name);
-		if (err != 0) {
-			pr_err("%s: Unable to request GPIO %d\n", THIS_MODULE->name, Savelec_pulse_in[num]);
-			for (num-- ; num >= 0; num--)
-				gpio_free(Savelec_pulse_in[num]);
-			return err;
-		}
-		gpio_direction_input(Savelec_pulse_in[num]);
+	if (Gpio_count != Edge_count) {
+		pr_err("%s: count of gpios and edges differ.\n", THIS_MODULE->name);
+		return -EINVAL;
 	}
 
-	for (num = 0; num < NB; num++) {
+	if (Gpio_count == 0) {
+		pr_err("%s: no GPIO given as module param.\n", THIS_MODULE->name);
+		return -EINVAL;
+	}
+
+	for (num = 0; num < Gpio_count; num++) {
+		err = gpio_request(Gpio[num], THIS_MODULE->name);
+		if (err != 0) {
+			pr_err("%s: Unable to request GPIO %d\n", THIS_MODULE->name, Gpio[num]);
+			for (num-- ; num >= 0; num--)
+				gpio_free(Gpio[num]);
+			return err;
+		}
+		gpio_direction_input(Gpio[num]);
+	}
+
+	for (num = 0; num < Gpio_count; num++) {
 		spin_lock_init(&Counter_spl[num]);
 		Counter[num] = 0;
 	}
 
-	for (num = 0; num < NB; num++) {
-		err = request_irq(gpio_to_irq(Savelec_pulse_in[num]), savelec_pulse_counter_handler,
-			IRQF_TRIGGER_RISING,
+	for (num = 0; num < Gpio_count; num++) {
+		err = request_irq(gpio_to_irq(Gpio[num]), gpio_pulse_counter_handler,
+			(Edge[num] == 1 ? IRQF_TRIGGER_RISING : IRQF_TRIGGER_FALLING),
 			THIS_MODULE->name, (void *) num);
 		if (err != 0) {
-			pr_err("%s: Unable to request IRQ for GPIO %d\n", THIS_MODULE->name, Savelec_pulse_in[num]);
+			pr_err("%s: Unable to request IRQ for GPIO %d\n", THIS_MODULE->name, Gpio[num]);
 			for (num-- ; num >= 0; num--)
-				free_irq(gpio_to_irq(Savelec_pulse_in[num]), (void *) num);
-			for (num = 0; num < NB; num++)
-				gpio_free(Savelec_pulse_in[num]);
+				free_irq(gpio_to_irq(Gpio[num]), (void *) num);
+			for (num = 0; num < Gpio_count; num++)
+				gpio_free(Gpio[num]);
 			return err;
 		}
 	}
 
+	for (num = 0; num < Gpio_count; num++) {
+		memset(&Gpio_pulse_counter_misc_driver[num], 0, sizeof(struct miscdevice));
+		sprintf(name, "gpio-pulse-counter-%ld", num);
+		Gpio_pulse_counter_misc_driver[num].name  = name;
+		Gpio_pulse_counter_misc_driver[num].minor = MISC_DYNAMIC_MINOR;
+		Gpio_pulse_counter_misc_driver[num].fops  = &Gpio_pulse_counter_fops;
+		Gpio_pulse_counter_misc_driver[num].mode  = 0666;
 
-	for (num = 0; num < NB; num++) {
-		memset(&savelec_pulse_counter_misc_driver[num], 0, sizeof(struct miscdevice));
-		sprintf(name, "savelec-pulse-counter-%ld", num);
-		savelec_pulse_counter_misc_driver[num].name  = name;
-		savelec_pulse_counter_misc_driver[num].minor = MISC_DYNAMIC_MINOR;
-		savelec_pulse_counter_misc_driver[num].fops  = &savelec_pulse_counter_fops;
-		savelec_pulse_counter_misc_driver[num].mode  = 0666;
-
-		err = misc_register(&savelec_pulse_counter_misc_driver[num]);
+		err = misc_register(&Gpio_pulse_counter_misc_driver[num]);
 		if (err != 0) {
-			pr_err("%s: Unable to request IRQ for GPIO %d\n", THIS_MODULE->name, Savelec_pulse_in[num]);
+			pr_err("%s: unable to request IRQ for GPIO %d\n", THIS_MODULE->name, Gpio[num]);
 			for (num-- ; num >= 0; num--)
-				misc_deregister(&savelec_pulse_counter_misc_driver[num]);
-			for (num = 0; num < NB; num++) {
-				free_irq(gpio_to_irq(Savelec_pulse_in[num]), (void *) num);
-				gpio_free(Savelec_pulse_in[num]);
+				misc_deregister(&Gpio_pulse_counter_misc_driver[num]);
+			for (num = 0; num < Gpio_count; num++) {
+				free_irq(gpio_to_irq(Gpio[num]), (void *) num);
+				gpio_free(Gpio[num]);
 			}
 			return err;
 		}
@@ -162,10 +176,10 @@ static void __exit gpio_pulse_counter_exit(void)
 {
 	unsigned long num;
 
-	for (num = 0; num < NB; num++) {
-		misc_deregister(&gpio_pulse_counter_misc_driver[num]);
-		free_irq(gpio_to_irq(Gpio_pulse_in[num]), (void *) num);
-		gpio_free(Gpio_pulse_in[num]);
+	for (num = 0; num < Gpio_count; num++) {
+		misc_deregister(&Gpio_pulse_counter_misc_driver[num]);
+		free_irq(gpio_to_irq(Gpio[num]), (void *) num);
+		gpio_free(Gpio[num]);
 	}
 }
 
